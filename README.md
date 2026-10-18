@@ -1,18 +1,24 @@
 # dev-servers
 
-A Claude Code mod that puts two start/stop buttons in a band above the prompt,
-for getting a Rojo project running:
+A Claude Code mod that puts start/stop controls for a Rojo project in a band
+above the prompt:
 
-- **Rojo serve**: `rojo serve` (shows the port once Rojo is listening)
-- **Watch tree**: `node tools/watchTree.js`
+- **Rojo**: `rojo serve` for any `*.project.json` in the folder. With more than
+  one project a picker chooses which place the Serve/Stop button acts on. Every
+  place serves on Rojo's default port (34872), so Studio's plugin never needs
+  changing; serving one place stops the other first. `default.project.json` is
+  left out when named places (`Game`, `Lobby`) sit beside it, since it's only
+  there for tooling.
+- **Watch tree**: `node tools/watchTree.js`, shown only when the repo has that
+  script. One watcher regenerates every project file.
 
-The band only appears in folders that have a `default.project.json`. Each
-button shows a status dot (green running, red exited with its code), and a
-**Logs** button shows the last few lines from each. Both stop when the session
-ends.
+The band only appears in folders that have a project file. Each control shows
+a status dot (green running, red exited with its code), and **Logs** shows the
+last few lines of the selected Rojo place and the watcher. Everything stops
+when the session ends. On the mobile app the picker is a button that cycles.
 
-`rojo` and `node` must be on the PATH Claude Code sees. On macOS, if the Rojo
-button shows "Could not start", the app probably can't see `~/.rokit/bin`.
+`rojo` and `node` must be on the PATH Claude Code sees. On macOS, if Rojo shows
+"Could not start", the app probably can't see `~/.rokit/bin`.
 
 ## Install
 

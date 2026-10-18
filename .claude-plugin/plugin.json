@@ -1,7 +1,9 @@
 {
   "name": "dev-servers",
-  "version": "0.2.0",
-  "description": "Start and stop rojo serve and the Rojo tree watcher from a band above the prompt",
-  "author": { "name": "Geo-TheDev" },
+  "version": "0.3.0",
+  "description": "Serve any of a project's Rojo places (each on its own port) and run the tree watcher from a band above the prompt",
+  "author": {
+    "name": "Geo-TheDev"
+  },
   "types": "./types/index.d.ts"
 }
