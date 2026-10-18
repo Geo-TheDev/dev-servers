@@ -1,0 +1,6 @@
+{
+  "name": "dev-servers",
+  "description": "Start/stop buttons for rojo serve and the Rojo tree watcher in Claude Code",
+  "owner": { "name": "Geo-TheDev" },
+  "plugins": [{ "name": "dev-servers", "source": "./" }]
+}
