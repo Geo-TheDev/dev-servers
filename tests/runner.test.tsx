@@ -340,3 +340,51 @@ test("a fresh clone without Rokit says how to get it", async ($, on) => {
   expect(await ui.find({ type: 'Link', text: 'Install Rokit' })).toBeDefined()
   await ui.unmount()
 })
+
+test('Crunch Sync with places: lists each place, and starts over when the project files change', async ($, on) => {
+  let finish: (() => void) | undefined
+  on('session.root', async () => ({ value: 'C:/game' }))
+  on('fs.list', async () => ({ value: files('Game.project.json', 'Lobby.project.json', 'default.project.json') }))
+  on('fs.exists', async () => ({ value: true }))
+  on('process.run', async (_$, e) => (e.argv[0] === 'node' ? ok(HOST) : ok()))
+  on('process.spawn', async function* (_$, e) {
+    if (e.argv[0] !== 'powershell.exe') return { value: { code: 0, signal: null } satisfies ProcessSpawnResult }
+    yield { stream: 'stdout', text: '[crunch-sync-pid] 4242\r\n' } satisfies ProcessSpawnChunk
+    yield { stream: 'stdout', text: '  Game      Testing\n  Project   default.project.json  port 34880\n[00:10] Connected. Press Start\n' } satisfies ProcessSpawnChunk
+    yield { stream: 'stdout', text: '[00:11] Project files changed. Reconnecting with the new list (press Start again for the ones you want).\n' } satisfies ProcessSpawnChunk
+    yield { stream: 'stdout', text: '[00:11] Starting Game.project.json on port 34881...\n[00:11] Starting Lobby.project.json on port 34880...\n' } satisfies ProcessSpawnChunk
+    yield { stream: 'stdout', text: '[00:12] Lobby.project.json syncing on port 34880 - in Studio, open the Rojo plugin and press Connect (port 34880).\n' } satisfies ProcessSpawnChunk
+    await new Promise<void>(resolve => { finish = resolve })
+    return { value: { code: 0, signal: null } satisfies ProcessSpawnResult }
+  })
+
+  const ui = await $.ui.mount({ plugin: 'dev-servers', surface: 'desktop', ...BAND })
+  void ui.press({ key: 'sync' })
+  for (let i = 0; i < 20 && !finish; i++) await tick()
+  expect(await ui.find({ type: 'Text', text: /default/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '● Lobby :34880' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '◐ Game :34881' })).toBeDefined()
+  finish?.()
+  await ui.unmount()
+})
+
+test('project files that appear later show up without restarting', async ($, on) => {
+  let names = ['README.md']
+  on('session.root', async () => ({ value: 'C:/proj' }))
+  on('fs.list', async () => ({ value: files(...names) }))
+  on('fs.exists', async () => ({ value: false }))
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text key="engine">engine band</Text>
+  })
+
+  const ui = await $.ui.mount({ plugin: 'dev-servers', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'rojo' })).toBeUndefined()
+  await ui.unmount()
+
+  names = ['README.md', 'default.project.json']
+  await new Promise<void>(resolve => setTimeout(resolve, 2100))
+  const again = await $.ui.mount({ plugin: 'dev-servers', surface: 'desktop', ...BAND })
+  expect(await again.find({ key: 'rojo', text: /Rojo serve/ })).toBeDefined()
+  await again.unmount()
+})

@@ -39,11 +39,14 @@ const newGameForm = atom({ plugin: 'dev-servers', key: 'newGameForm' } as const,
 const newGameRun = atom({ plugin: 'dev-servers', key: 'newGameRun' } as const, { status: 'idle', steps: [], lines: [] } as NewGameRun)
 
 const running: Record<ServerId, HookStream<ProcessSpawnChunk, ProcessSpawnResult>> = {}
-const setups = new Map<string, Setup>()
+// The band renders often, so a folder's project files are read at most every couple of seconds; files that
+// appear later (genRojoTree writing Lobby/Game, a branch switch) show up without restarting Claude Code.
+const RESCAN_MS = 2000
+const setups = new Map<string, { at: number; setup: Setup }>()
 
 const discover = async ($: EngineInterface, root: string): Promise<Setup> => {
   const known = setups.get(root)
-  if (known) return known
+  if (known && Date.now() - known.at < RESCAN_MS) return known.setup
 
   const entries = await $.fs.list(root).catch(() => [])
   const all = entries
@@ -60,7 +63,7 @@ const discover = async ($: EngineInterface, root: string): Promise<Setup> => {
     projects: files.map(file => ({ file, name: file.slice(0, -PROJECT_SUFFIX.length), port: PORT_NUMBER })),
     watcher: (await $.fs.exists(`${root}/${WATCH_SCRIPT}`)) ? WATCHER : undefined,
   }
-  setups.set(root, setup)
+  setups.set(root, { at: Date.now(), setup })
   return setup
 }
 
@@ -316,6 +319,9 @@ const readSyncLine = (state: SyncState, raw: string): SyncState => {
   if (line === "Crunch Sync can't start") return { ...state, problem: [] }
   if (/^Connected\./.test(line)) return { ...state, status: state.status === 'stopping' ? state.status : 'connected' }
   if ((match = /^Game\s+(.+)$/.exec(line))) return { ...state, game: (match[1] ?? '') }
+  // The places Crunch serves, listed when the script connects; a change in project files starts the list over.
+  if ((match = /^Project\s+(.+?)\s+port (\d+)$/.exec(line))) return { ...state, places: place((match[1] ?? ''), Number((match[2] ?? '')), 'stopped') }
+  if (/^Project files changed\./.test(line)) return { ...state, places: {} }
   if ((match = /^(https?:\/\/\S+\/games\/\S+\/sync)$/.exec(line))) return { ...state, page: (match[1] ?? '') }
   if ((match = /^Starting (.+) on port (\d+)\.\.\.$/.exec(line))) return { ...state, places: place((match[1] ?? ''), Number((match[2] ?? '')), 'starting') }
   if ((match = /^(.+) syncing on port (\d+)/.exec(line))) return { ...state, places: place((match[1] ?? ''), Number((match[2] ?? '')), 'syncing') }
@@ -908,7 +914,7 @@ export const register: Register = on => {
             </Button>
             {places.map(([name, place]) => (
               <Text key={`place-${name}`}>
-                <Text color={placeColour(place)}>{placeDot(place)}</Text> {name}
+                <Text color={placeColour(place)}>{placeDot(place)}</Text> {name.replace(/\.project\.json$/i, '')}
                 {place.port ? <Text dimColor> :{place.port}</Text> : null}
               </Text>
             ))}
