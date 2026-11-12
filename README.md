@@ -9,8 +9,12 @@ When the session's folder is a game repo with Crunch Sync (`sync/crunch-sync.ps1
 or `sync/Crunch Sync.command`, from the game template), the band shows one
 **Crunch Sync** button. It starts the repo's Crunch Sync script (no
 double-clicking) together with `node tools/watchTree.js`, and Crunch starts Rojo
-for every `*.project.json` straight away. The band then shows the game, each
-place with its port, and a **Sync page** link. Press it again to stop everything,
+for every place straight away: each `*.project.json` at the top of the repo,
+leaving out `default.project.json` when named places (`Lobby`, `Game`) sit
+beside it, since it's only there for tooling. The band then shows the game, each
+place with its port, and a **Sync page** link. Project files that appear later
+(say `genRojoTree.js` writing a new place) are picked up without restarting
+Claude Code. Press it again to stop everything,
 Rojo included. You can still stop or start single places from the game's Sync
 tab in Crunch.
 
