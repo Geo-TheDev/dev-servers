@@ -1,7 +1,7 @@
 {
   "name": "dev-servers",
-  "version": "0.3.0",
-  "description": "Serve any of a project's Rojo places (each on its own port) and run the tree watcher from a band above the prompt",
+  "version": "0.4.0",
+  "description": "Crunch Sync and the Rojo tree watcher on one button above the prompt, Rojo serve for repos without Crunch Sync, and /new-game to make a game from your template",
   "author": {
     "name": "Geo-TheDev"
   },
