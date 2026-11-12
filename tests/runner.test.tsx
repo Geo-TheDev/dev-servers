@@ -179,8 +179,8 @@ test('Crunch Sync: an unlinked repo gets an "Add to Crunch" link, prefilled', as
   }))
   on('process.run', async (_$, e) =>
     e.argv[0] === 'node' ? ok(HOST)
-    : e.argv[1] === 'remote' ? ok('git@github.com:me/My-Game.git\n')
-    : e.argv[1] === 'branch' ? ok('main\n')
+    : e.argv.includes('remote') ? ok('git@github.com:me/My-Game.git\n')
+    : e.argv.includes('branch') ? ok('main\n')
     : ok(),
   )
   on('process.spawn', async function* () {
@@ -230,8 +230,8 @@ test('New game: makes the project, picks a free port, makes the repo and links t
     ran.push([...e.argv])
     if (e.argv[0] === 'node' && e.argv[1] === '-p') return ok(HOST)
     if (e.argv[1] === 'tools/newProject.js') made.add('C:/Games/TycoonSim/.git')
-    if (e.argv[1] === 'remote') return ok('https://github.com/Geo-TheDev/Example-Project.git\n')
-    if (e.argv[1] === 'branch') return ok('main\n')
+    if (e.argv.includes('remote')) return ok('https://github.com/Geo-TheDev/Example-Project.git\n')
+    if (e.argv.includes('branch')) return ok('main\n')
     return ok()
   })
 
@@ -253,5 +253,34 @@ test('New game: makes the project, picks a free port, makes the repo and links t
   ])
   const link = await ui.find({ type: 'Link', text: 'Add it to Crunch' })
   expect(link?.props.href).toBe('https://crunch.example/games?new=1&name=Tycoon%20Sim&repo=Geo-TheDev%2FTycoon-Sim&branch=main&port=34881')
+  await ui.unmount()
+})
+
+test("Crunch Sync: a repo git won't read (dubious ownership) still gets its link from .git/config", async ($, on) => {
+  const gitCalls: string[][] = []
+  on('session.root', async () => ({ value: 'E:/Roblox/Game' }))
+  on('fs.list', async () => ({ value: files('default.project.json') }))
+  on('fs.exists', async (_$, e) => ({ value: !e.path.endsWith('tools/watchTree.js') }))
+  on('fs.read', async (_$, e) => ({
+    value: e.path.endsWith('config.json') ? '{"url":"https://crunch.example"}'
+      : e.path.endsWith('.git/config') ? '[core]\r\n\tbare = false\r\n[remote "upstream"]\r\n\turl = https://github.com/x/y\r\n[remote "origin"]\r\n\turl = https://github.com/me/My-Game.git\r\n'
+      : e.path.endsWith('.git/HEAD') ? 'ref: refs/heads/dev\n'
+      : '{}',
+  }))
+  on('process.run', async (_$, e) => {
+    if (e.argv[0] === 'node') return ok(HOST)
+    gitCalls.push([...e.argv])
+    return { value: { exitCode: 128, stdout: '', stderr: 'fatal: detected dubious ownership', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout', text: "Crunch Sync can't start\nNo Crunch game is linked to the GitHub repo me/My-Game.\n" } satisfies ProcessSpawnChunk
+    return { value: { code: 1, signal: null } satisfies ProcessSpawnResult }
+  })
+
+  const ui = await $.ui.mount({ plugin: 'dev-servers', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'sync' })
+  const link = await ui.find({ type: 'Link', text: 'Add to Crunch' })
+  expect(link?.props.href).toBe('https://crunch.example/games?new=1&name=My-Game&repo=me%2FMy-Game&branch=dev')
+  expect(gitCalls[0]?.slice(0, 3)).toEqual(['git', '-c', 'safe.directory=E:/Roblox/Game'])
   await ui.unmount()
 })
