@@ -211,25 +211,50 @@ const crunchUrl = async ($: EngineInterface): Promise<string | undefined> => {
   }
 }
 
-// owner/name of a folder's GitHub origin remote.
-const githubRepoOf = async ($: EngineInterface, cwd: string): Promise<string | undefined> => {
+// Git refuses a repo whose folder another user owns ("dubious ownership": a second drive, a copied folder).
+// These reads trust just this folder for the one call; the person's git settings aren't changed.
+const gitIn = async ($: EngineInterface, cwd: string, args: string[]) => {
   try {
-    const { exitCode, stdout } = await $.process.run(['git', 'remote', 'get-url', 'origin'], { cwd })
-    if (exitCode !== 0) return undefined
-    return /github\.com[:/]+([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(stdout.trim())?.[1]
+    const { exitCode, stdout } = await $.process.run(['git', '-c', `safe.directory=${cwd.replace(/\\/g, '/')}`, ...args], { cwd })
+    return exitCode === 0 ? stdout.trim() || undefined : undefined
   } catch {
     return undefined
   }
 }
 
-const currentBranch = async ($: EngineInterface, cwd: string) => {
+const readText = async ($: EngineInterface, path: string) => {
   try {
-    const { stdout } = await $.process.run(['git', 'branch', '--show-current'], { cwd })
-    return stdout.trim() || undefined
+    return await $.fs.read(path)
   } catch {
     return undefined
   }
 }
+
+// origin's URL from .git/config, for when git itself won't answer.
+const originFromConfig = async ($: EngineInterface, cwd: string) => {
+  const lines = (await readText($, `${cwd}/.git/config`))?.split(/\r?\n/) ?? []
+  let isOrigin = false
+  for (const line of lines) {
+    const section = /^\s*\[(.+)\]\s*$/.exec(line)
+    if (section) {
+      isOrigin = /^remote\s+"origin"$/.test(section[1] ?? '')
+      continue
+    }
+    const url = /^\s*url\s*=\s*(.+?)\s*$/.exec(line)
+    if (isOrigin && url) return url[1]
+  }
+  return undefined
+}
+
+// owner/name of a folder's GitHub origin remote.
+const githubRepoOf = async ($: EngineInterface, cwd: string): Promise<string | undefined> => {
+  const url = (await gitIn($, cwd, ['remote', 'get-url', 'origin'])) ?? (await originFromConfig($, cwd))
+  return url ? /github\.com[:/]+([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(url)?.[1] : undefined
+}
+
+const currentBranch = async ($: EngineInterface, cwd: string) =>
+  (await gitIn($, cwd, ['branch', '--show-current'])) ??
+  /^ref:\s*refs\/heads\/(.+)$/m.exec((await readText($, `${cwd}/.git/HEAD`)) ?? '')?.[1]?.trim()
 
 const servePortOf = async ($: EngineInterface, file: string): Promise<number | undefined> => {
   try {
