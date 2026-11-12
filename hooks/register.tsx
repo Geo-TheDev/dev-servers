@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, HookStream, ProcessSpawnChunk, ProcessSpawnResult, Register } from 'claude-code'
 
-import type { NewGameForm, NewGameRun, NewGameStep, ServerId, ServerState, SyncPlace, SyncState } from '../types'
+import type { NewGameForm, NewGameRun, NewGameStep, ServerId, ServerState, SetupRun, SyncPlace, SyncState } from '../types'
 
 type Server = { id: ServerId; label: string; argv: string[] }
 
@@ -439,6 +439,100 @@ const placeDot = (place: SyncPlace) =>
 const placeColour = (place: SyncPlace) =>
   place.state === 'syncing' ? 'success' : place.state === 'error' ? 'error' : 'subtle'
 
+// ---------- Setting up a fresh clone ----------
+
+// What a game repo from the template needs before it can sync: its tools (Rokit), packages (Wally), patched
+// packages, and the generated Rojo tree. The same steps newProject.js runs for a new game, minus copying.
+type SetupStep = { label: string; argv: string[]; when: string }
+
+const SETUP_STEPS: SetupStep[] = [
+  // --no-trust-check: the tools are the repo's own rokit.toml, and there's no terminal here to answer the prompt.
+  { label: 'Install tools', argv: ['rokit', 'install', '--no-trust-check'], when: 'rokit.toml' },
+  { label: 'Install packages', argv: ['wally', 'install'], when: 'wally.toml' },
+  { label: 'Patch packages', argv: ['node', 'tools/postinstall.js'], when: 'tools/postinstall.js' },
+  { label: 'Build the Rojo tree', argv: ['node', 'tools/genRojoTree.js'], when: 'tools/genRojoTree.js' },
+]
+
+// A folder made from the template (or any Rokit/Wally Roblox repo), set up or not.
+const isGameRepo = async ($: EngineInterface, root: string) => {
+  for (const file of ['rokit.toml', 'wally.toml', 'tools/genRojoTree.js', SYNC_PS1, SYNC_SH]) {
+    if (await $.fs.exists(`${root}/${file}`)) return true
+  }
+  return false
+}
+
+// Why the repo isn't ready yet, or nothing when it is: no packages after a fresh clone, or no project file.
+const setupNeeded = async ($: EngineInterface, root: string, hasProjects: boolean) => {
+  const missing: string[] = []
+  if ((await $.fs.exists(`${root}/wally.toml`)) && !(await $.fs.exists(`${root}/Packages`))) missing.push('packages')
+  if (!hasProjects && (await $.fs.exists(`${root}/tools/genRojoTree.js`))) missing.push('Rojo tree')
+  return missing
+}
+
+const setupRuns = atom({ plugin: 'dev-servers', key: 'setup' } as const, {} as Record<string, SetupRun>)
+
+const patchSetup = ($: EngineInterface, root: string, fn: (run: SetupRun) => SetupRun) =>
+  update($, setupRuns, all => ({ ...all, [root]: fn(all[root] ?? { status: 'idle', steps: [], lines: [] }) }))
+
+const isSettingUp = new Set<string>()
+
+// Runs each step the repo has, in order. Rokit's tools are run from ~/.rokit/bin when they're there, since a
+// fresh Rokit install isn't on the PATH Claude Code started with.
+const runSetup = async ($: EngineInterface, root: string) => {
+  if (isSettingUp.has(root)) return false
+  isSettingUp.add(root)
+  try {
+    const h = await host($)
+    const rokitBin = h.home ? join(h, h.home, '.rokit', 'bin') : ''
+    const exe = async (name: string) => {
+      if (name === 'node' || !rokitBin) return name
+      const full = join(h, rokitBin, h.platform === 'win32' ? `${name}.exe` : name)
+      return (await $.fs.exists(full)) ? full : name
+    }
+    await patchSetup($, root, () => ({ status: 'running', steps: [], lines: [] }))
+
+    for (const step of SETUP_STEPS) {
+      if (!(await $.fs.exists(`${root}/${step.when}`))) continue
+      const mark = (state: NewGameStep['state'], note?: string) =>
+        patchSetup($, root, run => ({
+          ...run,
+          steps: run.steps.some(one => one.label === step.label)
+            ? run.steps.map(one => (one.label === step.label ? { label: step.label, state, note } : one))
+            : [...run.steps, { label: step.label, state, note }],
+        }))
+      await mark('running', step.argv.join(' '))
+      let result: { exitCode: number; stdout: string; stderr: string } | undefined
+      try {
+        const [command = '', ...rest] = step.argv
+        result = await $.process.run([await exe(command), ...rest], { cwd: root, timeoutMs: 600_000 })
+      } catch (error) {
+        result = undefined
+        await patchSetup($, root, run => ({ ...run, lines: [...run.lines, `${step.argv[0]}: ${String(error)}`].slice(-MAX_LINES) }))
+      }
+      if (result) {
+        const out = cleanLines(`${result.stdout}\n${result.stderr}`)
+        await patchSetup($, root, run => ({ ...run, lines: [...run.lines, ...out].slice(-MAX_LINES) }))
+      }
+      if (result?.exitCode !== 0) {
+        const why =
+          result === undefined && step.argv[0] === 'rokit' ? 'Rokit isn\'t installed'
+          : result === undefined ? `${step.argv[0]} not found`
+          : `exited ${result.exitCode} (see Logs)`
+        await mark('failed', why)
+        await patchSetup($, root, run => ({ ...run, status: 'failed', needsRokit: result === undefined && step.argv[0] === 'rokit' }))
+        return false
+      }
+      await mark('done')
+    }
+
+    setups.delete(root)
+    await patchSetup($, root, run => ({ ...run, status: 'done' }))
+    return true
+  } finally {
+    isSettingUp.delete(root)
+  }
+}
+
 // ---------- New game ----------
 
 const NEW_GAME_PANE = 'new-game'
@@ -706,10 +800,57 @@ export const register: Register = on => {
     const root = await $.session.root()
     const { projects, watcher } = await discover($, root)
     const [first] = projects
-    if (!first) return next(e)
+    const isGame = await isGameRepo($, root)
+    if (!first && !isGame) return next(e)
 
     const elements = $.ui.resolve(e)
     const { Box, Button, Text, Link } = elements
+
+    // A fresh clone (or a folder that was never set up): one button sets it up, then starts syncing.
+    const missing = isGame ? await setupNeeded($, root, first !== undefined) : []
+    const setup = (await read($, setupRuns))[root]
+    if (missing.length > 0 || setup?.status === 'running' || setup?.status === 'failed' || !first) {
+      const canSync = await hasSync($, root)
+      const showLogs = await read($, isShowingLogs)
+      const go = async () => {
+        if ((await runSetup($, root)) && canSync) await startSync($, root, (await discover($, root)).watcher)
+      }
+      const label =
+        setup?.status === 'running' ? 'Setting up'
+        : setup?.status === 'failed' ? 'Retry set up'
+        : canSync ? 'Set up and sync'
+        : 'Set up'
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row" gap={1} alignItems="center">
+            <Text dimColor>{canSync ? 'Crunch' : 'Dev'}</Text>
+            <Button key="setup" plain onPress={() => void go()}>
+              <Text color={setup?.status === 'failed' ? 'error' : 'subtle'}>{setup?.status === 'running' ? '◐' : setup?.status === 'failed' ? '✕' : '○'}</Text> {label}
+            </Button>
+            {setup?.status !== 'running' && setup?.status !== 'failed' && missing.length > 0 && (
+              <Text dimColor>this repo needs its {missing.join(' and ')} first</Text>
+            )}
+            {(setup?.steps ?? []).map(step => (
+              <Text key={`setup-${step.label}`}>
+                <Text color={stepColour(step)}>{stepMark(step)}</Text> {step.label}
+              </Text>
+            ))}
+            {setup?.needsRokit && <Link href="https://github.com/rojo-rbx/rokit#installation" label="Install Rokit" />}
+            {(setup?.lines.length ?? 0) > 0 && (
+              <Button key="logs" plain dimColor label={showLogs ? 'Hide logs' : 'Logs'} onPress={() => void update($, isShowingLogs, value => !value)} />
+            )}
+          </Box>
+          {setup?.status === 'failed' && !showLogs && (
+            <Text color="error" wrap="truncate-end">{setup.steps.find(step => step.state === 'failed')?.note ?? 'Set up stopped.'}</Text>
+          )}
+          {showLogs &&
+            (setup?.lines ?? []).slice(-LOG_LINES_SHOWN * 2).map((line, i) => (
+              <Text key={`setup-log-${i}`} dimColor wrap="truncate-end">{line}</Text>
+            ))}
+        </Box>
+      )
+    }
+    if (!first) return next(e)
     // The mobile app draws no Select yet; it gets a button that cycles instead.
     const Select = e.surface !== 'mobile' && 'Select' in elements ? elements.Select : undefined
 

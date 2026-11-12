@@ -284,3 +284,59 @@ test("Crunch Sync: a repo git won't read (dubious ownership) still gets its link
   expect(gitCalls[0]?.slice(0, 3)).toEqual(['git', '-c', 'safe.directory=E:/Roblox/Game'])
   await ui.unmount()
 })
+
+test('a fresh clone: one button sets it up (Rokit, Wally, patch, tree), then starts Crunch Sync', async ($, on) => {
+  const ran: string[][] = []
+  const spawned: string[][] = []
+  let hasPackages = false
+  on('session.root', async () => ({ value: 'E:/Games/Fresh' }))
+  on('fs.list', async () => ({ value: files('default.project.json', 'wally.toml', 'rokit.toml') }))
+  on('fs.exists', async (_$, e) => ({
+    value: e.path.endsWith('/Packages') ? hasPackages
+      : e.path.includes('.rokit') ? e.path.endsWith('rokit.exe')
+      : true,
+  }))
+  on('process.run', async (_$, e) => {
+    if (e.argv[0] === 'node' && e.argv[1] === '-p') return ok(HOST)
+    ran.push([...e.argv])
+    if (e.argv[1] === 'install' && e.argv[0] === 'wally') hasPackages = true
+    return ok('done\n')
+  })
+  on('process.spawn', async function* (_$, e) {
+    spawned.push([...e.argv])
+    return { value: { code: 0, signal: null } satisfies ProcessSpawnResult }
+  })
+
+  const ui = await $.ui.mount({ plugin: 'dev-servers', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'setup', text: /Set up and sync/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /needs its packages first/ })).toBeDefined()
+  expect(await ui.find({ key: 'sync' })).toBeUndefined()
+
+  await ui.press({ key: 'setup' })
+
+  expect(ran).toEqual([
+    ['C:/Users/me/.rokit/bin/rokit.exe', 'install', '--no-trust-check'],
+    ['wally', 'install'],
+    ['node', 'tools/postinstall.js'],
+    ['node', 'tools/genRojoTree.js'],
+  ])
+  expect(spawned.some(argv => argv[0] === 'powershell.exe')).toBe(true)
+  expect(await ui.find({ key: 'sync' })).toBeDefined()
+  await ui.unmount()
+})
+
+test("a fresh clone without Rokit says how to get it", async ($, on) => {
+  on('session.root', async () => ({ value: 'E:/Games/Fresh' }))
+  on('fs.list', async () => ({ value: files('default.project.json') }))
+  on('fs.exists', async (_$, e) => ({ value: !e.path.endsWith('/Packages') && !e.path.includes('.rokit') }))
+  on('process.run', async (_$, e) => {
+    if (e.argv[0] === 'node') return ok(HOST)
+    throw new Error('spawn rokit ENOENT')
+  })
+
+  const ui = await $.ui.mount({ plugin: 'dev-servers', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'setup' })
+  expect(await ui.find({ key: 'setup', text: /Retry set up/ })).toBeDefined()
+  expect(await ui.find({ type: 'Link', text: 'Install Rokit' })).toBeDefined()
+  await ui.unmount()
+})
