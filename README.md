@@ -19,6 +19,22 @@ Crunch**, which opens Crunch's new-game form with the repo, branch and port
 filled in. If your Crunch config isn't saved on this computer, it points you at
 Crunch's Setup page.
 
+## Setting up a fresh clone
+
+When the folder is a game repo that isn't set up yet (a fresh clone has no
+`Packages/`, or there's no project file yet), the band shows **Set up and
+sync** instead. One press runs what the repo has of:
+
+1. `rokit install --no-trust-check` (the tools in `rokit.toml`),
+2. `wally install`,
+3. `node tools/postinstall.js`,
+4. `node tools/genRojoTree.js`,
+
+then starts Crunch Sync. Each step ticks off on the band, and **Logs** shows the
+output. If Rokit isn't installed, it links to Rokit's install page. Rokit's
+tools are run from `~/.rokit/bin`, so a fresh Rokit install works without
+restarting Claude Code.
+
 ## Rojo serve (repos without Crunch Sync)
 
 - **Rojo**: `rojo serve` for any `*.project.json` in the folder. With more than

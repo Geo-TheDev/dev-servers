@@ -50,6 +50,14 @@ export type NewGameRun = {
   error?: string
 }
 
+// Setting up a fresh clone (rokit, wally, patch packages, Rojo tree), per session root.
+export type SetupRun = {
+  status: 'idle' | 'running' | 'done' | 'failed'
+  steps: NewGameStep[]
+  lines: string[]
+  needsRokit?: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'dev-servers': {
@@ -60,6 +68,7 @@ declare module 'claude-code' {
       sync: Record<string, SyncState>
       newGameForm: NewGameForm
       newGameRun: NewGameRun
+      setup: Record<string, SetupRun>
     }
   }
 }
